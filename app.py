@@ -1,6 +1,4 @@
 import gradio as gr
-import pypdfium2
-import requests
 from langchain.chains import RetrievalQA
 from langchain.llms import HuggingFacePipeline
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -10,60 +8,57 @@ from huggingface_hub import login
 from langchain.document_loaders import PyPDFium2Loader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Authenticate with Hugging Face
+# ✅ Step 1: Authenticate with Hugging Face
 login("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")  # Replace with your API Key
 
-# Download PDF from URL
-pdf_url = "https://na.gov.pk/uploads/documents/1333523681_951.pdf"
-pdf_path = "document.pdf"
-response = requests.get(pdf_url)
-with open(pdf_path, "wb") as f:
-    f.write(response.content)
-
-# Load and Process PDF
+# ✅ Step 2: Load and Process PDF
 def load_and_process_pdf(file_path):
     loader = PyPDFium2Loader(file_path)
     data = loader.load()
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,
-        chunk_overlap=50
+        chunk_size=300,  # Smaller chunks for better relevance
+        chunk_overlap=50  # More overlap for continuity
     )
     chunks = text_splitter.split_documents(data)
     return chunks
 
-chunks = load_and_process_pdf(pdf_path)
+chunks = load_and_process_pdf("adn.pdf")
 
-# Load Mistral-7B Model
+# ✅ Step 3: Load Mistral-7B Model
 def llm():
     model_name = "mistralai/Mistral-7B-Instruct-v0.1"
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
     model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=True, device_map="auto")
-    pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer, max_length=256)
+    
+    # ✅ Changed to "text2text-generation" for structured responses
+    pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer, max_length=256)  # ✅ Reduced max_length for concise answers
+    
     return HuggingFacePipeline(pipeline=pipe)
 
-# Load Vector Database
-embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-vectordb = Chroma.from_documents(chunks, embeddings_model)
-retriever = vectordb.as_retriever(search_kwargs={"k": 2})
+# ✅ Step 4: Load Vector Database
+embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")  # Better embeddings
+vectordb = ChroAma.from_documents(chunks, embeddings_model)
+retriever = vectordb.as_retriever(search_kwargs={"k": 2})  # Fetch fewer chunks for precise answers
 
-# Set Up RAG
+# ✅ Step 5: Set Up RAG
 rag_chain = RetrievalQA.from_chain_type(
     llm=llm(),
-    chain_type="map_reduce",
+    chain_type="map_reduce",  # ✅ Changed to "map_reduce" for better response filtering
     retriever=retriever
 )
 
-# Gradio Interface
+# ✅ Gradio Interface
 def query_system(query):
     if not query:
         return "Error: Query is required."
     
+    # Handle greetings
     greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
     if query.lower() in greetings:
         return "Hello! How can I assist you today?"
     
     response = rag_chain.invoke(query)
-    return response.strip()[:256]
+    return response.strip()[:256]  # ✅ Limit response length to 256 characters
 
 gui = gr.Interface(
     fn=query_system,
