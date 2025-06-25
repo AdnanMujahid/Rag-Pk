@@ -1,8 +1,6 @@
-gradio
-langchain
-transformers
-torch
+gradio==4.34.0
+requests
+langchain==0.1.17
+chromadb==0.4.24
 sentence-transformers
-chromadb
-pdfium
 huggingface-hub
