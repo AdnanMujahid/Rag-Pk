@@ -1,71 +1,73 @@
+import os
 import gradio as gr
-from langchain.chains import RetrievalQA
-from langchain.llms import HuggingFacePipeline
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-from langchain.vectorstores import Chroma
+import requests
+from huggingface_hub import login as hf_login
 from langchain.embeddings import HuggingFaceEmbeddings
-from huggingface_hub import login
-from langchain.document_loaders import PyPDFium2Loader
+from langchain.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.docstore.document import Document
 
-# ✅ Step 1: Authenticate with Hugging Face
-login("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")  # Replace with your API Key
+# ✅ Load API Keys securely
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 
-# ✅ Step 2: Load and Process PDF
-def load_and_process_pdf(file_path):
-    loader = PyPDFium2Loader(file_path)
-    data = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,  # Smaller chunks for better relevance
-        chunk_overlap=50  # More overlap for continuity
-    )
-    chunks = text_splitter.split_documents(data)
-    return chunks
+# ✅ Authenticate with Hugging Face
+hf_login(HF_API_KEY)
 
-chunks = load_and_process_pdf("adn.pdf")
+# ✅ Load and chunk text file
+def load_text_file(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    docs = splitter.split_documents([Document(page_content=text)])
+    print(f"✅ Loaded {len(docs)} chunks.")
+    return docs
 
-# ✅ Step 3: Load Mistral-7B Model
-def llm():
-    model_name = "mistralai/Mistral-7B-Instruct-v0.1"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=True, device_map="auto")
-    
-    # ✅ Changed to "text2text-generation" for structured responses
-    pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer, max_length=256)  # ✅ Reduced max_length for concise answers
-    
-    return HuggingFacePipeline(pipeline=pipe)
+chunks = load_text_file("constitution.txt")
 
-# ✅ Step 4: Load Vector Database
-embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")  # Better embeddings
-vectordb = ChroAma.from_documents(chunks, embeddings_model)
-retriever = vectordb.as_retriever(search_kwargs={"k": 2})  # Fetch fewer chunks for precise answers
+# ✅ Embed and store chunks
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+vectordb = Chroma.from_documents(chunks, embeddings, persist_directory="./chroma_db")
+retriever = vectordb.as_retriever(search_kwargs={"k": 1})
 
-# ✅ Step 5: Set Up RAG
-rag_chain = RetrievalQA.from_chain_type(
-    llm=llm(),
-    chain_type="map_reduce",  # ✅ Changed to "map_reduce" for better response filtering
-    retriever=retriever
-)
+# ✅ Gemini API call
+def call_gemini_flash(prompt: str) -> str:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    data = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        return result["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        return f"❌ Gemini Error: {str(e)}"
 
-# ✅ Gradio Interface
+# ✅ Query logic
 def query_system(query):
     if not query:
-        return "Error: Query is required."
-    
-    # Handle greetings
-    greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
-    if query.lower() in greetings:
-        return "Hello! How can I assist you today?"
-    
-    response = rag_chain.invoke(query)
-    return response.strip()[:256]  # ✅ Limit response length to 256 characters
+        return "Please enter a question."
+    try:
+        docs = retriever.get_relevant_documents(query)
+        context = docs[0].page_content if docs else ""
+        full_prompt = f"Context:\n{context}\n\nQuestion: {query}\nAnswer:"
+        return call_gemini_flash(full_prompt)
+    except Exception as e:
+        return f"❌ Retrieval Error: {str(e)}"
 
+# ✅ Gradio UI
 gui = gr.Interface(
     fn=query_system,
-    inputs=gr.Textbox(label="Enter your query"),
-    outputs=gr.Textbox(label="Response"),
-    title="Legal Case Assistance Chatbot",
-    description="Ask questions related to legal cases, and get AI-generated responses using RAG."
+    inputs=gr.Textbox(label="Ask something from the text file"),
+    outputs=gr.Textbox(label="Gemini 2.0 Flash Response"),
+    title="Fast Text QA with Gemini 2.0 Flash",
+    description="Ask questions from the uploaded constitution text using Gemini Flash and Chroma."
 )
 
-gui.launch(server_name="0.0.0.0", server_port=5000, share=True)
+gui.launch(server_name="0.0.0.0", server_port=7860)
